@@ -1,3 +1,4 @@
+from prisma import Prisma
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -8,7 +9,6 @@ import os
 import time
 import logging
 import json
-import re
 from datetime import datetime
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -35,7 +35,7 @@ def setup_logging():
         os.makedirs('logs')
         
     # Set up logging with timestamp in filename
-    log_filename = f'logs/kolscan_scraper_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    log_filename = f'logs/gmgn_scraper_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     
     logging.basicConfig(
         level=logging.INFO,
@@ -62,9 +62,9 @@ def click_time_filter(driver, period, logger):
     
     # Target buttons using exact class names from the HTML
     button_selectors = {
-        'Daily': "//div[@class='leaderboard_timeFilterContainer__9U8_y']/p[@class='leaderboard_selected__q7DOH']",
-        'Weekly': "//div[@class='leaderboard_timeFilterContainer__9U8_y']/p[text()='Weekly']",
-        'Monthly': "//div[@class='leaderboard_timeFilterContainer__9U8_y']/p[text()='Monthly']"
+    'Daily': "//div[@class='leaderboard_timeFilterContainer_9U8_y']/p[@class='leaderboard_selected_q7DOH']",
+    'Weekly': "//div[@class='leaderboard_timeFilterContainer_9U8_y']/p[text()='Weekly']",
+    'Monthly': "//div[@class='leaderboard_timeFilterContainer_9U8_y']/p[text()='Monthly']"
     }
     
     try:
@@ -119,6 +119,10 @@ def extract_data(driver, period, logger):
             wallet_name = account_link.find('h1').text.strip()
             wallet_address = account_link['href'].split('/account/')[1]
 
+            win_div_tags = user.find('div', class_='remove-mobile').find_all('p')
+            win = win_div_tags[0].text.strip()
+            loss = win_div_tags[1].text.strip()
+
             pnl_div = user.find('div', class_='leaderboard_totalProfitNum__HzfFO')
             h1_tags = pnl_div.find_all('h1')
 
@@ -131,6 +135,8 @@ def extract_data(driver, period, logger):
                 'period': period_days[period],
                 'wallet_name': wallet_name,
                 'wallet_address': wallet_address,
+                'win': win,
+                'loss': loss,
                 'pnl_usd': pnl_usd,
                 'pnl_sol': pnl_sol,
                 'telegram': telegram,
@@ -144,14 +150,44 @@ def extract_data(driver, period, logger):
     logger.info(f"Successfully extracted data for {len(data)} users")
     return data
 
-def save_to_csv(data):
-    df = pd.DataFrame(data)
-    filename = f'kol_leaderboard.csv'
-    df.to_csv(filename, index=False)
-    print(f"Saved {filename} with {len(data)} records")
+async def save_to_database(data):
+    db = Prisma()
+    await db.connect()
+
+    for record in data:
+        try:
+            await db.kolleaderboard.upsert(
+                where={
+                    'wallet_address': record['wallet_address']
+                },
+                data={
+                    'create': {
+                        'period': record['period'],
+                        'wallet_name': record['wallet_name'],
+                        'wallet_address': record['wallet_address'],
+                        'pnl_usd': record['pnl_usd'],
+                        'pnl_sol': record['pnl_sol'],
+                        'telegram': record['telegram'],
+                        'twitter': record['twitter']
+                    },
+                    'update': {
+                        'period': record['period'],
+                        'wallet_name': record['wallet_name'],
+                        'pnl_usd': record['pnl_usd'],
+                        'pnl_sol': record['pnl_sol'],
+                        'telegram': record['telegram'],
+                        'twitter': record['twitter']
+                    }
+                }
+            )
+        except Exception as e:
+            print(f"Error storing record for {record['wallet_address']}: {str(e)}")
+
+    await db.disconnect()
+    print(f"Saved {len(data)} records to database")
 
 
-def scrape_kolscan():
+async def scrape_kolscan():
     logger = setup_logging()
     logger.info("Initializing scraper")
     
@@ -175,7 +211,7 @@ def scrape_kolscan():
             except Exception as e:
                 logger.error(f"Failed to complete {period} scraping: {str(e)}", exc_info=True)
 
-        save_to_csv(all_data)  # Save combined data from all periods
+        await save_to_database(all_data)  # Save combined data from all periods
     
     except Exception as e:
         logger.error(f"Critical scraper error: {str(e)}", exc_info=True)
@@ -186,4 +222,5 @@ def scrape_kolscan():
 
 
 if __name__ == "__main__":
-    scrape_kolscan()
+    import asyncio
+    asyncio.run(scrape_kolscan())
