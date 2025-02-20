@@ -153,6 +153,7 @@ def extract_data(driver, period, logger):
 async def save_to_database(data):
     db = Prisma()
     await db.connect()
+    await db.kolleaderboard.delete_many()
 
     for record in data:
         try:
